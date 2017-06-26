@@ -6,9 +6,11 @@ Created on Sun Jun 25 00:41:25 2017
 """
 import Constants
 from scraper_lib.ScraperWrapper import ScraperWrapper
+from concurrent.futures import ThreadPoolExecutor, wait, as_completed
 import os
 import requests
 import re
+import json
 class InstagramScraper:
     logger = None
     constants = None
@@ -72,9 +74,37 @@ class InstagramScraper:
             #Error Code Update
             if https_request.status_code == 404:
                 error_code = 'USERNAME_NOT_FOUND'
+                error = 'Failed to fetch user information. The username does not exist.'
             else:
                 error_code = 'SERVER_COMMUNICATION_ERROR'
+                error = 'Failed to communicate with Instagram server'
             #Error JSON
-            user_instagram_data = dict([('error_code', error_code),('url', url_usersearch),('status_code', https_request.status_code),('response', https_request.text)])
+            user_instagram_data = dict([('error',error),('error_code', error_code),('url', url_usersearch),('status_code', https_request.status_code),('response', https_request.text)])
         return user_instagram_data
+    
+    def getNextSetOfData(self, query_urls):
+        self.logger.info(("Querying data for the next page, total query URLs = %s")%(len(query_urls)))
+        response_object = None
+        pool = ThreadPoolExecutor(max_workers=10)
+        if len(query_urls) > 0:
+            futures = []
+            for query_url in query_urls:
+                futures.append(pool.submit(requests.get, query_url, verify = False, proxies = self.getProxy()))
+            results = [r.result() for r in as_completed(futures)]
+            for https_request in results:
+#                https_request = requests.get(query_url, verify = False, proxies = self.getProxy())
+                if https_request.status_code == 200:
+                    json_object = json.loads(https_request.text)
+                    if 'data' in json_object and 'user' in json_object['data'] and json_object['data']['user'] is not None:
+                        if json_object['data']['user']['edge_owner_to_timeline_media']['page_info']['has_next_page'] is True:
+                            query_url = query_url.split('&after=')
+                            query_url[len(query_url)-1] = json_object['data']['user']['edge_owner_to_timeline_media']['page_info']['end_cursor']
+                            query_url = '&after='.join(map(str,query_url))
+                            json_object['query_urls'] = [query_url]
+                        response_object =  json_object
+                        break;
+        return response_object;
+                        
+        
+                
         
